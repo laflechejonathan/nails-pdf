@@ -3,6 +3,12 @@ name = "nails-pdf"
 authors = ["Jonathan Lafleche <laflechejonathan@gmail.com>"]
 version = "0.0.1"
 readme = "README.md"
+build = "build.rs"
+
+[build-dependencies]
+lalrpop = "0.13.1"
 
 [dependencies]
 inflate = "0.2"
+lalrpop-util = "0.13.1"
+regex = "0.2.1"
