@@ -73,49 +73,50 @@ fn get_doc_metadata(file: &mut File) -> (parsers::cos::DictNode, parsers::xref::
             break;
         }
     }
+
     let trailer_str = String::from_utf8(trailer).unwrap();
     let mut trailer_parser = parsers::cos::Rdp::new(StringInput::new(&trailer_str));
-    trailer_parser.dictionary();
+    trailer_parser.node();
     let trailer = trailer_parser.parse();
     let xref = parse_xref(file, xref_offset);
     return (trailer, xref);
 }
 
-// fn cat_object(file: &mut File, object_offset: u64) {
-//     match file.seek(SeekFrom::Start(object_offset)) {
-//         Err(_) => panic!("couldn't seek to object"),
-//         Ok(_) => (),
-//     };
+fn cat_xobject(file: &mut File, xref_entry: parsers::xref::XRefEntry) {
+    match file.seek(SeekFrom::Start(xref_entry.offset)) {
+        Err(_) => panic!("couldn't seek to object"),
+        Ok(_) => (),
+    };
 
-//     let newline = '\n' as u8;
-//     let mut found_stream = false;
-//     let mut obj_dict_buffer = Vec::new();
-//     let mut stream_buffer = Vec::new();
-//     let mut file_buffer = Vec::new();
-//     file.take(CHUNK_SIZE as u64).read_to_end(&mut file_buffer).unwrap();
+    let newline = '\n' as u8;
+    let mut obj_dict_buffer = Vec::new();
+    let mut file_buffer = Vec::new();
+    file.take(CHUNK_SIZE as u64).read_to_end(&mut file_buffer).unwrap();
 
-//     for line in file_buffer.split(|byte| *byte == newline) {
-//         if line == "stream".as_bytes() {
-//             found_stream = true;
-//         } else if line == "endstream".as_bytes() {
-//             break
-//         } else if !found_stream {
-//             obj_dict_buffer.extend_from_slice(line);
-//         } else {
-//             stream_buffer.extend_from_slice(line);
-//         }
-//     }
+    for line in file_buffer.split(|byte| *byte == newline).skip(1) {
+        if line == "stream".as_bytes() {
+            break
+        } else if line == "endstream".as_bytes() {
+            break
+        } else if line == "endobj".as_bytes() {
+            break
+        } else {
+            obj_dict_buffer.extend_from_slice(line);
+        }
+    }
 
-//     let obj_dict = parse_dict(&obj_dict_buffer);
-//     // let stream = inflate_bytes(&stream_buffer).unwrap();
-//     println!("Object: {:?}", obj_dict);
-//     // println!("{}", from_utf8(&stream).unwrap());
-// }
+    let dict_str = String::from_utf8(obj_dict_buffer).unwrap();
+    let mut dict_parser = parsers::cos::Rdp::new(StringInput::new(&dict_str));
+    dict_parser.node();
+    let obj_dict = dict_parser.parse();
+
+    println!("Object: {:?}", obj_dict);
+}
 
 
 // This is the main function
 fn main() {
-    let path = Path::new("i-92.pdf");
+    let path = Path::new("michaelnguyen.pdf");
     let display = path.display();
 
     // Open the path in read-only mode, returns `io::Result<File>`
@@ -130,7 +131,10 @@ fn main() {
     println!("Trailer:\n{:?}", trailer);
     println!("Xref:\n{:?}", xref);
 
-//     if let DictNode::Array(array) = xref {
-//         cat_xref_table(&mut file, &array);
-//     }
+    for (index, entry) in xref.into_iter().enumerate() {
+        if !entry.is_free {
+            println!("cat XObject {} at offset {}", index, entry.offset);
+            cat_xobject(&mut file, entry);
+        }
+    }
 }

@@ -13,11 +13,20 @@ use pest::prelude::*;
 #[derive(Debug, PartialEq, Clone)]
 pub struct XRefTable(Vec<XRefEntry>);
 
+impl IntoIterator for XRefTable {
+    type Item = XRefEntry;
+    type IntoIter = ::std::vec::IntoIter<XRefEntry>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct XRefEntry {
-    offset: u64,
-    generation_id: u64,
-    is_free: bool,
+    pub offset: u64,
+    pub generation_id: u64,
+    pub is_free: bool,
 }
 
 impl_rdp! {

@@ -26,7 +26,7 @@ impl_rdp! {
         endarray = { ["]"] }
         dictionary = {  begindict ~ keypair* ~ enddict }
         keypair = { key ~ node }
-        node = _{ (array | reference | string | key | int) }
+        node = _{ (array | reference | string | key | int | dictionary) }
         array = { beginarray ~ node+ ~ endarray }
         reference =  { int ~ int ~ ["R"] }
         key = @{ ["/"] ~ (!special ~ !whitespace ~ any)+ }
@@ -340,4 +340,25 @@ fn test_parsing_complex_dictionary() {
     assert!(parser.dictionary());
     let node = parser.parse();
     assert_eq!(node, DictNode::Dict(corresponding_map));
+}
+
+
+#[test]
+fn test_parsing_real_world_dictionary() {
+    let dict = "<</Type/Page/Parent 7 0 R/Resources 24 0 \
+               R/MediaBox[0 0 612 792]/Annots[4 0 R 5 0 R \
+               6 0 R ]/Group<</S/Transparency/CS/DeviceRGB/I \
+               true>>/Contents 2 0 R>>";
+    let mut parser = Rdp::new(StringInput::new(dict));
+    assert!(parser.dictionary());
+}
+
+#[test]
+fn test_parsing_uri_value() {
+    let dict = "<</Type/Annot/Subtype/Link/Border[0 0 0] \
+                /Rect[92.5 701.5 236.8 714.2]/A<</Type/ \
+                Action/S/URI/URI(mailto:michael.nguyen@alumni.ubc.ca)>> \
+                >>";
+    let mut parser = Rdp::new(StringInput::new(dict));
+    assert!(parser.dictionary());
 }
