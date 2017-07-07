@@ -12,8 +12,8 @@ use std::io::BufReader;
 use std::str::from_utf8;
 use inflate::inflate_bytes;
 
-#[macro_use]
-extern crate pest;
+#[macro_use] extern crate pest;
+#[macro_use] extern crate maplit;
 
 mod parser;
 

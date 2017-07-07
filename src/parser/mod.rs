@@ -20,9 +20,11 @@ pub enum DictNode {
 
 impl_rdp! {
     grammar! {
+        begindict = { ["<"] ~ ["<"] }
+        enddict = { [">"] ~ [">"] }
         beginarray = { ["["] }
         endarray = { ["]"] }
-        dictionary = { ["<"] ~ ["<"] ~ keypair* ~ [">"] ~ [">"] }
+        dictionary = {  begindict ~ keypair* ~ enddict }
         keypair = { key ~ node }
         node = _{ (array | reference | string | key | int) }
         array = { beginarray ~ node+ ~ endarray }
@@ -31,13 +33,14 @@ impl_rdp! {
         string = @{ !int ~ (!special ~ !whitespace ~ any)+ }
         int    =  @{ ["-"]? ~ ['0'..'9']+ }
         whitespace = _{ [" "] | ["\t"] | ["\r"] | ["\n"] }
-        special = { ["["] | ["]"] | (["<"] ~ ["<"]) | ([">"] ~ [">"]) | ["/"] }
+        special = { beginarray | begindict | endarray | enddict | ["/"] }
     }
 
     process! {
         parse(&self) -> DictNode {
             (&int: int) => DictNode::Int(int.parse::<i64>().unwrap()),
             (&s: string) => DictNode::Str(s.to_string()),
+            (&k: key) => DictNode::Str(k.to_string()),
             (_: reference, u1: parse(), u2: parse()) => {
                 // this is fucking lame, given my grammar I know these are ints
                 match (u1, u2) {
@@ -48,6 +51,9 @@ impl_rdp! {
             (_: array, _: beginarray, mut contents: _array()) => {
                 contents.reverse();
                 DictNode::Array(contents)
+            },
+            (_: dictionary, _: begindict, mut contents: _dict()) => {
+                DictNode::Dict(contents)
             }
         }
 
@@ -55,6 +61,14 @@ impl_rdp! {
             (_: endarray) => Vec::new(),
             (head: parse(), mut tail: _array()) => {
                 tail.push(head);
+                tail
+            },
+        }
+
+        _dict(&self) -> HashMap<String, DictNode> {
+            (_: enddict) => HashMap::new(),
+            (_: keypair, &key: key, value: parse(), mut tail: _dict()) => {
+                tail.insert(key[1..].to_string(), value);
                 tail
             },
         }
@@ -153,7 +167,6 @@ fn test_nested_array() {
     assert_eq!(parser.queue(), &queue);
 }
 
-
 #[test]
 fn test_keypair() {
     let mut parser = Rdp::new(StringInput::new("/Size 65"));
@@ -171,7 +184,7 @@ fn test_keypair() {
 #[test]
 fn test_key_keypair() {
     // weirdly this is valid syntax in cos, equivalent to:
-    // { Type: "/Font", Subtype: "/TrueType" }
+    // { "Type": "/Font", "Subtype": "/TrueType" }
     let mut parser = Rdp::new(StringInput::new("/Type/Font/Subtype/TrueType"));
     assert!(parser.keypair());
     assert!(parser.keypair());
@@ -196,6 +209,7 @@ fn test_dictionary() {
     assert!(parser.end());
     let queue = vec![
         Token::new(Rule::dictionary, 0, 40),
+        Token::new(Rule::begindict, 0, 2),
         Token::new(Rule::keypair, 3, 16),
         Token::new(Rule::key, 3, 10),
         Token::new(Rule::reference, 11, 16),
@@ -204,6 +218,7 @@ fn test_dictionary() {
         Token::new(Rule::keypair, 17, 37),
         Token::new(Rule::key, 17, 24),
         Token::new(Rule::key, 25, 37),
+        Token::new(Rule::enddict, 38, 40),
     ];
     assert_eq!(parser.queue(), &queue);
 }
@@ -273,4 +288,17 @@ fn test_parsing_array() {
         DictNode::Int(759),
         DictNode::Str("Something".to_string())
     ].to_vec()));
+}
+
+#[test]
+fn test_parsing_dict() {
+    let dict = "<< /Length 5 0 R /Filter /FlateDecode >>";
+    let corresponding_map = hashmap!{
+        "Length".to_string() => DictNode::ObjectReference(5, 0),
+        "Filter".to_string() => DictNode::Str("/FlateDecode".to_string()),
+    };
+    let mut parser = Rdp::new(StringInput::new(dict));
+    assert!(parser.dictionary());
+    let node = parser.parse();
+    assert_eq!(node, DictNode::Dict(corresponding_map));
 }
