@@ -1,3 +1,5 @@
+#![recursion_limit = "80"]
+
 extern crate inflate;
 
 use std::error::Error;
@@ -10,7 +12,10 @@ use std::io::BufReader;
 use std::str::from_utf8;
 use inflate::inflate_bytes;
 
-// mod parser;
+#[macro_use]
+extern crate pest;
+
+mod parser;
 
 #[derive(Debug)]
 enum DictNode {
@@ -205,14 +210,4 @@ fn main() {
     if let DictNode::Array(array) = xref {
         cat_xref_table(&mut file, &array);
     }
-}
-
-
-mod parser;
-#[test]
-fn calculator() {
-    assert!(parser::parse_Term("0x22").is_ok());
-    assert!(parser::parse_Term("(0x2f)").is_ok());
-    assert!(parser::parse_Term("((((0x4EF))))").is_ok());
-    assert!(parser::parse_Term("((22)").is_err());
 }

@@ -1,420 +1,276 @@
-use std::str::FromStr;
-extern crate lalrpop_util as __lalrpop_util;
+use pest::prelude::*;
+use std::collections::HashMap;
 
-mod __parse__Term {
-    #![allow(non_snake_case, non_camel_case_types, unused_mut, unused_variables, unused_imports)]
+/*
+ * Parser for PDF COS object syntax. Think of COS kind of like a really
+ * awkward, hard to read version of JSON.
+ *
+ * It is the base object structure for any semantic element in PDF. 
+ *
+ */
 
-    use std::str::FromStr;
-    extern crate lalrpop_util as __lalrpop_util;
-    #[allow(dead_code)]
-    pub enum __Symbol<'input> {
-        Term_22_28_22(&'input str),
-        Term_22_29_22(&'input str),
-        Termr_23_220x_5ba_2dfA_2dF0_2d9_5d_2b_22_23(&'input str),
-        NtNum(i32),
-        NtTerm(i32),
-        Nt____Term(i32),
+#[derive(Debug, PartialEq, Clone)]
+pub enum DictNode {
+    Dict(HashMap<String, DictNode>),
+    Array(Vec<DictNode>),
+    Str(String),
+    Int(i64),
+    ObjectReference(i64, i64),
+}
+
+impl_rdp! {
+    grammar! {
+        beginarray = { ["["] }
+        endarray = { ["]"] }
+        dictionary = { ["<"] ~ ["<"] ~ keypair* ~ [">"] ~ [">"] }
+        keypair = { key ~ node }
+        node = _{ (array | reference | string | key | int) }
+        array = { beginarray ~ node+ ~ endarray }
+        reference =  { int ~ int ~ ["R"] }
+        key = @{ ["/"] ~ (!special ~ !whitespace ~ any)+ }
+        string = @{ !int ~ (!special ~ !whitespace ~ any)+ }
+        int    =  @{ ["-"]? ~ ['0'..'9']+ }
+        whitespace = _{ [" "] | ["\t"] | ["\r"] | ["\n"] }
+        special = { ["["] | ["]"] | (["<"] ~ ["<"]) | ([">"] ~ [">"]) | ["/"] }
     }
-    const __ACTION: &'static [i32] = &[
-        // State 0
-        4, 0, 5,
-        // State 1
-        -2, -2, -2,
-        // State 2
-        -4, -4, -4,
-        // State 3
-        4, 0, 5,
-        // State 4
-        -1, -1, -1,
-        // State 5
-        0, 7, 0,
-        // State 6
-        -3, -3, -3,
+
+    process! {
+        parse(&self) -> DictNode {
+            (&int: int) => DictNode::Int(int.parse::<i64>().unwrap()),
+            (&s: string) => DictNode::Str(s.to_string()),
+            (_: reference, u1: parse(), u2: parse()) => {
+                // this is fucking lame, given my grammar I know these are ints
+                match (u1, u2) {
+                    (DictNode::Int(a), DictNode::Int(b)) => DictNode::ObjectReference(a, b),
+                    _ => unreachable!(),
+                }
+            },
+            (_: array, _: beginarray, mut contents: _array()) => {
+                contents.reverse();
+                DictNode::Array(contents)
+            }
+        }
+
+        _array(&self) -> Vec<DictNode> {
+            (_: endarray) => Vec::new(),
+            (head: parse(), mut tail: _array()) => {
+                tail.push(head);
+                tail
+            },
+        }
+    }
+}
+
+#[test]
+fn test_key() {
+    let mut parser = Rdp::new(StringInput::new("/Hello"));
+    assert!(parser.key());
+    assert!(parser.end());
+
+    let mut parser = Rdp::new(StringInput::new("\n\n /Hello\t"));
+    parser.skip();
+    assert!(parser.key());
+    parser.skip();
+    assert!(parser.end());
+}
+
+#[test]
+fn test_int() {
+    let mut parser = Rdp::new(StringInput::new("45678"));
+    assert!(parser.int());
+    assert!(parser.end());
+
+    let mut parser = Rdp::new(StringInput::new("0"));
+    assert!(parser.int());
+    assert!(parser.end());
+
+    let mut parser = Rdp::new(StringInput::new("-35"));
+    assert!(parser.int());
+    assert!(parser.end());
+}
+
+#[test]
+fn test_string() {
+    let mut parser = Rdp::new(StringInput::new("Bonjour124"));
+    assert!(parser.string());
+    assert!(parser.end());
+
+    let mut parser = Rdp::new(StringInput::new("It was you Charlie!"));
+    assert!(parser.string());
+    parser.skip();
+    assert!(parser.string());
+    parser.skip();
+    assert!(parser.string());
+    parser.skip();
+    assert!(parser.string());
+    assert!(parser.end());
+}
+
+#[test]
+fn test_object_reference() {
+    let mut parser = Rdp::new(StringInput::new("34 0 R"));
+    assert!(parser.reference());
+
+    let queue = vec![
+        Token::new(Rule::reference, 0, 6),
+        Token::new(Rule::int, 0, 2),
+        Token::new(Rule::int, 3, 4),
     ];
-    const __EOF_ACTION: &'static [i32] = &[
-        0,
-        -2,
-        -4,
-        0,
-        -1,
-        0,
-        -3,
+    assert_eq!(parser.queue(), &queue);
+}
+
+#[test]
+fn test_array() {
+    let mut parser = Rdp::new(StringInput::new("[ 342 -124 6421 ]"));
+    assert!(parser.array());
+
+    let queue = vec![
+        Token::new(Rule::array, 0, 17),
+        Token::new(Rule::beginarray, 0, 1),
+        Token::new(Rule::int, 2, 5),
+        Token::new(Rule::int, 6, 10),
+        Token::new(Rule::int, 11, 15),
+        Token::new(Rule::endarray, 16, 17),
     ];
-    const __GOTO: &'static [i32] = &[
-        // State 0
-        2, 3, 0,
-        // State 1
-        0, 0, 0,
-        // State 2
-        0, 0, 0,
-        // State 3
-        2, 6, 0,
-        // State 4
-        0, 0, 0,
-        // State 5
-        0, 0, 0,
-        // State 6
-        0, 0, 0,
+    assert_eq!(parser.queue(), &queue);
+}
+
+#[test]
+fn test_nested_array() {
+    let mut parser = Rdp::new(StringInput::new("[ 342 [-124] ]"));
+    assert!(parser.array());
+
+    let queue = vec![
+        Token::new(Rule::array, 0, 14),
+        Token::new(Rule::beginarray, 0, 1),
+        Token::new(Rule::int, 2, 5),
+        Token::new(Rule::array, 6, 12),
+        Token::new(Rule::beginarray, 6, 7),
+        Token::new(Rule::int, 7, 11),
+        Token::new(Rule::endarray, 11, 12),
+        Token::new(Rule::endarray, 13, 14),
     ];
-    fn __expected_tokens(__state: usize) -> Vec<::std::string::String> {
-        const __TERMINAL: &'static [&'static str] = &[
-            r###""(""###,
-            r###"")""###,
-            r###"r#"0x[a-fA-F0-9]+"#"###,
-        ];
-        __ACTION[(__state * 3)..].iter().zip(__TERMINAL).filter_map(|(&state, terminal)| {
-            if state == 0 {
-                None
-            } else {
-                Some(terminal.to_string())
-            }
-        }).collect()
-    }
-    pub fn parse_Term<
-        'input,
-    >(
-        input: &'input str,
-    ) -> Result<i32, __lalrpop_util::ParseError<usize, (usize, &'input str), ()>>
-    {
-        let mut __tokens = super::__intern_token::__Matcher::new(input);
-        let mut __states = vec![0_i32];
-        let mut __symbols = vec![];
-        let mut __integer;
-        let mut __lookahead;
-        let mut __last_location = Default::default();
-        '__shift: loop {
-            __lookahead = match __tokens.next() {
-                Some(Ok(v)) => v,
-                None => break '__shift,
-                Some(Err(e)) => return Err(e),
-            };
-            __last_location = __lookahead.2.clone();
-            __integer = match __lookahead.1 {
-                (1, _) if true => 0,
-                (2, _) if true => 1,
-                (0, _) if true => 2,
-                _ => {
-                    let __state = *__states.last().unwrap() as usize;
-                    let __error = __lalrpop_util::ParseError::UnrecognizedToken {
-                        token: Some(__lookahead),
-                        expected: __expected_tokens(__state),
-                    };
-                    return Err(__error);
-                }
-            };
-            '__inner: loop {
-                let __state = *__states.last().unwrap() as usize;
-                let __action = __ACTION[__state * 3 + __integer];
-                if __action > 0 {
-                    let __symbol = match __integer {
-                        0 => match __lookahead.1 {
-                            (1, __tok0) => __Symbol::Term_22_28_22((__tok0)),
-                            _ => unreachable!(),
-                        },
-                        1 => match __lookahead.1 {
-                            (2, __tok0) => __Symbol::Term_22_29_22((__tok0)),
-                            _ => unreachable!(),
-                        },
-                        2 => match __lookahead.1 {
-                            (0, __tok0) => __Symbol::Termr_23_220x_5ba_2dfA_2dF0_2d9_5d_2b_22_23((__tok0)),
-                            _ => unreachable!(),
-                        },
-                        _ => unreachable!(),
-                    };
-                    __states.push(__action - 1);
-                    __symbols.push((__lookahead.0, __symbol, __lookahead.2));
-                    continue '__shift;
-                } else if __action < 0 {
-                    if let Some(r) = __reduce(input, __action, Some(&__lookahead.0), &mut __states, &mut __symbols, ::std::marker::PhantomData::<()>) {
-                        return r;
-                    }
-                } else {
-                    let __state = *__states.last().unwrap() as usize;
-                    let __error = __lalrpop_util::ParseError::UnrecognizedToken {
-                        token: Some(__lookahead),
-                        expected: __expected_tokens(__state),
-                    };
-                    return Err(__error)
-                }
-            }
-        }
-        loop {
-            let __state = *__states.last().unwrap() as usize;
-            let __action = __EOF_ACTION[__state];
-            if __action < 0 {
-                if let Some(r) = __reduce(input, __action, None, &mut __states, &mut __symbols, ::std::marker::PhantomData::<()>) {
-                    return r;
-                }
-            } else {
-                let __state = *__states.last().unwrap() as usize;
-                let __error = __lalrpop_util::ParseError::UnrecognizedToken {
-                    token: None,
-                    expected: __expected_tokens(__state),
-                };
-                return Err(__error);
-            }
-        }
-    }
-    pub fn __reduce<
-        'input,
-    >(
-        input: &'input str,
-        __action: i32,
-        __lookahead_start: Option<&usize>,
-        __states: &mut ::std::vec::Vec<i32>,
-        __symbols: &mut ::std::vec::Vec<(usize,__Symbol<'input>,usize)>,
-        _: ::std::marker::PhantomData<()>,
-    ) -> Option<Result<i32,__lalrpop_util::ParseError<usize, (usize, &'input str), ()>>>
-    {
-        let __nonterminal = match -__action {
-            1 => {
-                // Num = r#"0x[a-fA-F0-9]+"# => ActionFn(3);
-                let __sym0 = __pop_Termr_23_220x_5ba_2dfA_2dF0_2d9_5d_2b_22_23(__symbols);
-                let __start = __sym0.0.clone();
-                let __end = __sym0.2.clone();
-                let __nt = super::__action3::<>(input, __sym0);
-                let __states_len = __states.len();
-                __states.truncate(__states_len - 1);
-                __symbols.push((__start, __Symbol::NtNum(__nt), __end));
-                0
-            }
-            2 => {
-                // Term = Num => ActionFn(1);
-                let __sym0 = __pop_NtNum(__symbols);
-                let __start = __sym0.0.clone();
-                let __end = __sym0.2.clone();
-                let __nt = super::__action1::<>(input, __sym0);
-                let __states_len = __states.len();
-                __states.truncate(__states_len - 1);
-                __symbols.push((__start, __Symbol::NtTerm(__nt), __end));
-                1
-            }
-            3 => {
-                // Term = "(", Term, ")" => ActionFn(2);
-                let __sym2 = __pop_Term_22_29_22(__symbols);
-                let __sym1 = __pop_NtTerm(__symbols);
-                let __sym0 = __pop_Term_22_28_22(__symbols);
-                let __start = __sym0.0.clone();
-                let __end = __sym2.2.clone();
-                let __nt = super::__action2::<>(input, __sym0, __sym1, __sym2);
-                let __states_len = __states.len();
-                __states.truncate(__states_len - 3);
-                __symbols.push((__start, __Symbol::NtTerm(__nt), __end));
-                1
-            }
-            4 => {
-                // __Term = Term => ActionFn(0);
-                let __sym0 = __pop_NtTerm(__symbols);
-                let __start = __sym0.0.clone();
-                let __end = __sym0.2.clone();
-                let __nt = super::__action0::<>(input, __sym0);
-                return Some(Ok(__nt));
-            }
-            _ => panic!("invalid action code {}", __action)
-        };
-        let __state = *__states.last().unwrap() as usize;
-        let __next_state = __GOTO[__state * 3 + __nonterminal] - 1;
-        __states.push(__next_state);
-        None
-    }
-    fn __pop_Term_22_28_22<
-      'input,
-    >(
-        __symbols: &mut ::std::vec::Vec<(usize,__Symbol<'input>,usize)>
-    ) -> (usize, &'input str, usize) {
-        match __symbols.pop().unwrap() {
-            (__l, __Symbol::Term_22_28_22(__v), __r) => (__l, __v, __r),
-            _ => panic!("symbol type mismatch")
-        }
-    }
-    fn __pop_Term_22_29_22<
-      'input,
-    >(
-        __symbols: &mut ::std::vec::Vec<(usize,__Symbol<'input>,usize)>
-    ) -> (usize, &'input str, usize) {
-        match __symbols.pop().unwrap() {
-            (__l, __Symbol::Term_22_29_22(__v), __r) => (__l, __v, __r),
-            _ => panic!("symbol type mismatch")
-        }
-    }
-    fn __pop_Termr_23_220x_5ba_2dfA_2dF0_2d9_5d_2b_22_23<
-      'input,
-    >(
-        __symbols: &mut ::std::vec::Vec<(usize,__Symbol<'input>,usize)>
-    ) -> (usize, &'input str, usize) {
-        match __symbols.pop().unwrap() {
-            (__l, __Symbol::Termr_23_220x_5ba_2dfA_2dF0_2d9_5d_2b_22_23(__v), __r) => (__l, __v, __r),
-            _ => panic!("symbol type mismatch")
-        }
-    }
-    fn __pop_NtNum<
-      'input,
-    >(
-        __symbols: &mut ::std::vec::Vec<(usize,__Symbol<'input>,usize)>
-    ) -> (usize, i32, usize) {
-        match __symbols.pop().unwrap() {
-            (__l, __Symbol::NtNum(__v), __r) => (__l, __v, __r),
-            _ => panic!("symbol type mismatch")
-        }
-    }
-    fn __pop_NtTerm<
-      'input,
-    >(
-        __symbols: &mut ::std::vec::Vec<(usize,__Symbol<'input>,usize)>
-    ) -> (usize, i32, usize) {
-        match __symbols.pop().unwrap() {
-            (__l, __Symbol::NtTerm(__v), __r) => (__l, __v, __r),
-            _ => panic!("symbol type mismatch")
-        }
-    }
-    fn __pop_Nt____Term<
-      'input,
-    >(
-        __symbols: &mut ::std::vec::Vec<(usize,__Symbol<'input>,usize)>
-    ) -> (usize, i32, usize) {
-        match __symbols.pop().unwrap() {
-            (__l, __Symbol::Nt____Term(__v), __r) => (__l, __v, __r),
-            _ => panic!("symbol type mismatch")
-        }
-    }
-}
-pub use self::__parse__Term::parse_Term;
-mod __intern_token {
-    #![allow(unused_imports)]
-    use std::str::FromStr;
-    extern crate lalrpop_util as __lalrpop_util;
-    extern crate regex as __regex;
-    pub struct __Matcher<'input> {
-        text: &'input str,
-        consumed: usize,
-        regex_set: __regex::RegexSet,
-        regex_vec: Vec<__regex::Regex>,
-    }
-
-    impl<'input> __Matcher<'input> {
-        pub fn new(s: &'input str) -> __Matcher<'input> {
-            let __strs: &[&str] = &[
-                "^(?u:0x)(?u:[0-9A-Fa-f])+",
-                "^(?u:\\()",
-                "^(?u:\\))",
-            ];
-            let __regex_set = __regex::RegexSet::new(__strs).unwrap();
-            let __regex_vec = vec![
-                __regex::Regex::new("^(?u:0x)(?u:[0-9A-Fa-f])+").unwrap(),
-                __regex::Regex::new("^(?u:\\()").unwrap(),
-                __regex::Regex::new("^(?u:\\))").unwrap(),
-            ];
-            __Matcher {
-                text: s,
-                consumed: 0,
-                regex_set: __regex_set,
-                regex_vec: __regex_vec,
-            }
-        }
-    }
-
-    impl<'input> Iterator for __Matcher<'input> {
-        type Item = Result<(usize, (usize, &'input str), usize), __lalrpop_util::ParseError<usize,(usize, &'input str),()>>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            let __text = self.text.trim_left();
-            let __whitespace = self.text.len() - __text.len();
-            let __start_offset = self.consumed + __whitespace;
-            if __text.is_empty() {
-                self.text = __text;
-                self.consumed = __start_offset;
-                None
-            } else {
-                let __matches = self.regex_set.matches(__text);
-                if !__matches.matched_any() {
-                    Some(Err(__lalrpop_util::ParseError::InvalidToken {
-                        location: __start_offset,
-                    }))
-                } else {
-                    let mut __longest_match = 0;
-                    let mut __index = 0;
-                    for __i in 0 .. 3 {
-                        if __matches.matched(__i) {
-                            let __match = self.regex_vec[__i].find(__text).unwrap();
-                            let __len = __match.end();
-                            if __len >= __longest_match {
-                                __longest_match = __len;
-                                __index = __i;
-                            }
-                        }
-                    }
-                    let __result = &__text[..__longest_match];
-                    let __remaining = &__text[__longest_match..];
-                    let __end_offset = __start_offset + __longest_match;
-                    self.text = __remaining;
-                    self.consumed = __end_offset;
-                    Some(Ok((__start_offset, (__index, __result), __end_offset)))
-                }
-            }
-        }
-    }
+    assert_eq!(parser.queue(), &queue);
 }
 
-#[allow(unused_variables)]
-fn __action0<
-    'input,
->(
-    input: &'input str,
-    (_, __0, _): (usize, i32, usize),
-) -> i32
-{
-    (__0)
+
+#[test]
+fn test_keypair() {
+    let mut parser = Rdp::new(StringInput::new("/Size 65"));
+    assert!(parser.keypair());
+
+    let queue = vec![
+        Token::new(Rule::keypair, 0, 8),
+        Token::new(Rule::key, 0, 5),
+        Token::new(Rule::int, 6, 8),
+    ];
+    assert_eq!(parser.queue(), &queue);
 }
 
-#[allow(unused_variables)]
-fn __action1<
-    'input,
->(
-    input: &'input str,
-    (_, n, _): (usize, i32, usize),
-) -> i32
-{
-    n
+
+#[test]
+fn test_key_keypair() {
+    // weirdly this is valid syntax in cos, equivalent to:
+    // { Type: "/Font", Subtype: "/TrueType" }
+    let mut parser = Rdp::new(StringInput::new("/Type/Font/Subtype/TrueType"));
+    assert!(parser.keypair());
+    assert!(parser.keypair());
+    assert!(parser.end());
+
+    let queue = vec![
+        Token::new(Rule::keypair, 0, 10),
+        Token::new(Rule::key, 0, 5),
+        Token::new(Rule::key, 5, 10),
+        Token::new(Rule::keypair, 10, 27),
+        Token::new(Rule::key, 10, 18),
+        Token::new(Rule::key, 18, 27),
+    ];
+    assert_eq!(parser.queue(), &queue);
 }
 
-#[allow(unused_variables)]
-fn __action2<
-    'input,
->(
-    input: &'input str,
-    (_, _, _): (usize, &'input str, usize),
-    (_, t, _): (usize, i32, usize),
-    (_, _, _): (usize, &'input str, usize),
-) -> i32
-{
-    t
+#[test]
+fn test_dictionary() {
+    let dict = "<< /Length 5 0 R /Filter /FlateDecode >>";
+    let mut parser = Rdp::new(StringInput::new(dict));
+    assert!(parser.dictionary());
+    assert!(parser.end());
+    let queue = vec![
+        Token::new(Rule::dictionary, 0, 40),
+        Token::new(Rule::keypair, 3, 16),
+        Token::new(Rule::key, 3, 10),
+        Token::new(Rule::reference, 11, 16),
+        Token::new(Rule::int, 11, 12),
+        Token::new(Rule::int, 13, 14),
+        Token::new(Rule::keypair, 17, 37),
+        Token::new(Rule::key, 17, 24),
+        Token::new(Rule::key, 25, 37),
+    ];
+    assert_eq!(parser.queue(), &queue);
 }
 
-#[allow(unused_variables)]
-fn __action3<
-    'input,
->(
-    input: &'input str,
-    (_, s, _): (usize, &'input str, usize),
-) -> i32
-{
-    i32::from_str_radix(&s[2..], 16).unwrap()
+#[test]
+fn test_dictionary_with_array() {
+    let dict = r#"
+        << /Size 65 /Root 35 0 R /Info 1 0 R 
+        /ID
+        [<d83abc5b1b9bea6e1b372681e568f886><d83abc5b1b9bea6e1b372681e568f886>]
+        >>
+    "#;
+    let mut parser = Rdp::new(StringInput::new(dict));
+    parser.skip();
+    assert!(parser.dictionary());
+    parser.skip();
+    assert!(parser.end());
 }
 
-pub trait __ToTriple<'input, > {
-    type Error;
-    fn to_triple(value: Self) -> Result<(usize,(usize, &'input str),usize),Self::Error>;
+#[test]
+fn test_complex_dictionary() {
+    let dict = r#"
+        <</Type/FontDescriptor/FontName/CAAAAA+TimesNewRomanPSMT
+        /Flags 6
+        /FontBBox[-568 -306 2000 1007]/ItalicAngle 0
+        /Ascent 891
+        /Descent -216
+        /CapHeight 1006
+        /StemV 80
+        /FontFile2 8 0 R
+        >>
+    "#;
+    let mut parser = Rdp::new(StringInput::new(dict));
+    parser.skip();
+    assert!(parser.dictionary());
+    parser.skip();
+    assert!(parser.end());
 }
 
-impl<'input, > __ToTriple<'input, > for (usize, (usize, &'input str), usize) {
-    type Error = ();
-    fn to_triple(value: Self) -> Result<(usize,(usize, &'input str),usize),()> {
-        Ok(value)
-    }
+#[test]
+fn test_parsing_atoms() {
+    let mut parser = Rdp::new(StringInput::new("56"));
+    assert!(parser.int());
+    let node = parser.parse();
+    assert_eq!(node, DictNode::Int(56));
+
+    let mut parser = Rdp::new(StringInput::new("Bonjour"));
+    assert!(parser.string());
+    let node = parser.parse();
+    assert_eq!(node, DictNode::Str("Bonjour".to_string()));
 }
-impl<'input, > __ToTriple<'input, > for Result<(usize, (usize, &'input str), usize),()> {
-    type Error = ();
-    fn to_triple(value: Self) -> Result<(usize,(usize, &'input str),usize),()> {
-        value
-    }
+
+#[test]
+fn test_parsing_refs() {
+    let mut parser = Rdp::new(StringInput::new("30 0 R"));
+    assert!(parser.reference());
+    let node = parser.parse();
+    assert_eq!(node, DictNode::ObjectReference(30, 0));
+}
+
+#[test]
+fn test_parsing_array() {
+    let mut parser = Rdp::new(StringInput::new("[ 759 Something ]"));
+    assert!(parser.array());
+    let node = parser.parse();
+    assert_eq!(node, DictNode::Array([
+        DictNode::Int(759),
+        DictNode::Str("Something".to_string())
+    ].to_vec()));
 }
