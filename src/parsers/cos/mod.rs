@@ -302,3 +302,42 @@ fn test_parsing_dict() {
     let node = parser.parse();
     assert_eq!(node, DictNode::Dict(corresponding_map));
 }
+
+
+#[test]
+fn test_parsing_complex_dictionary() {
+    let dict = r#"
+        <</Type/FontDescriptor/FontName/CAAAAA+TimesNewRomanPSMT
+        /Flags 6
+        /FontBBox[-568 -306 2000 1007]/ItalicAngle 0
+        /Ascent 891
+        /Descent -216
+        /CapHeight 1006
+        /StemV 80
+        /FontFile2 8 0 R
+        >>
+    "#;
+    let bounding_box = DictNode::Array([
+        DictNode::Int(-568),
+        DictNode::Int(-306),
+        DictNode::Int(2000),
+        DictNode::Int(1007),
+    ].to_vec());
+    let corresponding_map = hashmap!{
+        "Type".to_string() => DictNode::Str("/FontDescriptor".to_string()),
+        "FontName".to_string() => DictNode::Str("/CAAAAA+TimesNewRomanPSMT".to_string()),
+        "Flags".to_string() => DictNode::Int(6),
+        "FontBBox".to_string() => bounding_box,
+        "ItalicAngle".to_string() => DictNode::Int(0),
+        "Ascent".to_string() => DictNode::Int(891),
+        "Descent".to_string() => DictNode::Int(-216),
+        "CapHeight".to_string() => DictNode::Int(1006),
+        "StemV".to_string() => DictNode::Int(80),
+        "FontFile2".to_string() => DictNode::ObjectReference(8, 0),
+    };
+    let mut parser = Rdp::new(StringInput::new(dict));
+    parser.skip();
+    assert!(parser.dictionary());
+    let node = parser.parse();
+    assert_eq!(node, DictNode::Dict(corresponding_map));
+}

@@ -15,7 +15,7 @@ use inflate::inflate_bytes;
 #[macro_use] extern crate pest;
 #[macro_use] extern crate maplit;
 
-mod parser;
+mod parsers;
 
 #[derive(Debug)]
 enum DictNode {
