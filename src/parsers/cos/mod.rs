@@ -13,9 +13,11 @@ use std::collections::HashMap;
 pub enum DictNode {
     Dict(HashMap<String, DictNode>),
     Array(Vec<DictNode>),
-    Str(String),
-    Int(i64),
     ObjectReference(i64, i64),
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
 }
 
 impl_rdp! {
@@ -26,20 +28,25 @@ impl_rdp! {
         endarray = { ["]"] }
         dictionary = {  begindict ~ keypair* ~ enddict }
         keypair = { key ~ node }
-        node = _{ (array | reference | string | key | int | dictionary) }
-        array = { beginarray ~ node+ ~ endarray }
+        node = _{ (array | reference | string |key | int | float | boolean | dictionary) }
+        array = { beginarray ~ node* ~ endarray }
         reference =  { int ~ int ~ ["R"] }
         key = @{ ["/"] ~ (!special ~ !whitespace ~ any)+ }
-        string = @{ !int ~ (!special ~ !whitespace ~ any)+ }
-        int    =  @{ ["-"]? ~ ['0'..'9']+ }
-        whitespace = _{ [" "] | ["\t"] | ["\r"] | ["\n"] }
-        special = { beginarray | begindict | endarray | enddict | ["/"] }
+        string = @{ (["("] ~ acceptable_string* ~ [")"]) | (["<"] ~ acceptable_string+ ~ [">"])}
+        acceptable_string = _{ (whitespace | ["/"] | ['a'..'z'] | ['A'..'Z'] | ['0'..'9'] | [":"] | ["."] | ["@"] | ["'"] ) }
+        int =  @{ !float ~ ["-"]? ~ ['0'..'9']+ }
+        float =  @{ ["-"]? ~ ['0'..'9']+ ~ ["."] ~ ['0'..'9']* }
+        boolean = @{ ["true"] | ["false"] }
+        whitespace = _{ [" "] | ["\t"] | ["\r"] | ["\n"] | ["endobj"] }
+        special = { beginarray | begindict | endarray | enddict | ["\\"]| ["/"] | ["("] | [")"] }
     }
 
     process! {
         parse(&self) -> DictNode {
             (&int: int) => DictNode::Int(int.parse::<i64>().unwrap()),
+            (&float: float) => DictNode::Float(float.parse::<f64>().unwrap()),
             (&s: string) => DictNode::Str(s.to_string()),
+            (&b: boolean) => DictNode::Bool(b.parse::<bool>().unwrap()),
             (&k: key) => DictNode::Str(k.to_string()),
             (_: reference, u1: parse(), u2: parse()) => {
                 // this is fucking lame, given my grammar I know these are ints
@@ -104,18 +111,28 @@ fn test_int() {
 }
 
 #[test]
+fn test_float() {
+    let mut parser = Rdp::new(StringInput::new("3.14"));
+    assert!(parser.float());
+    assert!(parser.end());
+
+    let mut parser = Rdp::new(StringInput::new("-214.946"));
+    assert!(parser.float());
+    assert!(parser.end());
+
+    let mut parser = Rdp::new(StringInput::new("0.02"));
+    assert!(parser.float());
+    assert!(parser.end());
+}
+
+#[test]
 fn test_string() {
-    let mut parser = Rdp::new(StringInput::new("Bonjour124"));
+    let mut parser = Rdp::new(StringInput::new("(A)"));
     assert!(parser.string());
     assert!(parser.end());
 
-    let mut parser = Rdp::new(StringInput::new("It was you Charlie!"));
+    let mut parser = Rdp::new(StringInput::new("<d83abc5b1b9bea6e1b372681e568f886><d83abc5b1b9bea6e1b372681e568f886>"));
     assert!(parser.string());
-    parser.skip();
-    assert!(parser.string());
-    parser.skip();
-    assert!(parser.string());
-    parser.skip();
     assert!(parser.string());
     assert!(parser.end());
 }
@@ -166,6 +183,20 @@ fn test_nested_array() {
     ];
     assert_eq!(parser.queue(), &queue);
 }
+
+#[test]
+fn test_empty_array() {
+    let mut parser = Rdp::new(StringInput::new("[  ]"));
+    assert!(parser.array());
+
+    let queue = vec![
+        Token::new(Rule::array, 0, 4),
+        Token::new(Rule::beginarray, 0, 1),
+        Token::new(Rule::endarray, 3, 4),
+    ];
+    assert_eq!(parser.queue(), &queue);
+}
+
 
 #[test]
 fn test_keypair() {
@@ -265,10 +296,15 @@ fn test_parsing_atoms() {
     let node = parser.parse();
     assert_eq!(node, DictNode::Int(56));
 
-    let mut parser = Rdp::new(StringInput::new("Bonjour"));
+    let mut parser = Rdp::new(StringInput::new("(Bonjour)"));
     assert!(parser.string());
     let node = parser.parse();
-    assert_eq!(node, DictNode::Str("Bonjour".to_string()));
+    assert_eq!(node, DictNode::Str("(Bonjour)".to_string()));
+
+    let mut parser = Rdp::new(StringInput::new("true"));
+    assert!(parser.boolean());
+    let node = parser.parse();
+    assert_eq!(node, DictNode::Bool(true));
 }
 
 #[test]
@@ -281,12 +317,12 @@ fn test_parsing_refs() {
 
 #[test]
 fn test_parsing_array() {
-    let mut parser = Rdp::new(StringInput::new("[ 759 Something ]"));
+    let mut parser = Rdp::new(StringInput::new("[ 759 -124 ]"));
     assert!(parser.array());
     let node = parser.parse();
     assert_eq!(node, DictNode::Array([
         DictNode::Int(759),
-        DictNode::Str("Something".to_string())
+        DictNode::Int(-124)
     ].to_vec()));
 }
 
@@ -356,9 +392,30 @@ fn test_parsing_real_world_dictionary() {
 #[test]
 fn test_parsing_uri_value() {
     let dict = "<</Type/Annot/Subtype/Link/Border[0 0 0] \
-                /Rect[92.5 701.5 236.8 714.2]/A<</Type/ \
-                Action/S/URI/URI(mailto:michael.nguyen@alumni.ubc.ca)>> \
+                /Rect[92.5 701.5 236.8 714.2]/A<</Type \
+                /Action/S/URI/URI(mailto:human@alumni.ubc.ca)>> \
                 >>";
+    let mut parser = Rdp::new(StringInput::new(dict));
+    assert!(parser.dictionary());
+}
+
+#[test]
+fn test_whitespace_value() {
+    let dict = "<</Producer(GNU Ghostscript 7.05)>>";
+    let mut parser = Rdp::new(StringInput::new(dict));
+    assert!(parser.dictionary());
+}
+
+#[test]
+fn test_floating_point_in_dict() {
+    let dict = "<</Type/ExtGState/Name/R4/TR/Identity/OPM 1/SM 0.02>>";
+    let mut parser = Rdp::new(StringInput::new(dict));
+    assert!(parser.dictionary());
+}
+
+#[test]
+fn test_special_chars_in_string() {
+    let dict = "<</Flags(/fi/fl/foo)>>";
     let mut parser = Rdp::new(StringInput::new(dict));
     assert!(parser.dictionary());
 }

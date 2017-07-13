@@ -2,16 +2,16 @@
 
 extern crate inflate;
 
-use std::error::Error;
-use std::fs::File;
-use std::io::prelude::*;
-use std::io::SeekFrom;
-use std::path::Path;
-use std::collections::HashMap;
-use std::io::BufReader;
-use std::str::from_utf8;
 use inflate::inflate_bytes;
 use pest::prelude::*;
+use std::collections::HashMap;
+use std::error::Error;
+use std::fs::File;
+use std::io::BufReader;
+use std::io::SeekFrom;
+use std::io::prelude::*;
+use std::path::Path;
+use std::str::from_utf8;
 
 #[macro_use] extern crate pest;
 #[macro_use] extern crate maplit;
@@ -89,23 +89,28 @@ fn cat_xobject(file: &mut File, xref_entry: parsers::xref::XRefEntry) {
     };
 
     let newline = '\n' as u8;
-    let mut obj_dict_buffer = Vec::new();
+    let mut dict_str = "".to_owned();
     let mut file_buffer = Vec::new();
     file.take(CHUNK_SIZE as u64).read_to_end(&mut file_buffer).unwrap();
 
     for line in file_buffer.split(|byte| *byte == newline).skip(1) {
-        if line == "stream".as_bytes() {
-            break
-        } else if line == "endstream".as_bytes() {
-            break
-        } else if line == "endobj".as_bytes() {
-            break
+        let line_str = String::from_utf8(line.to_vec()).unwrap();
+        if line_str.contains("stream") {
+            let v: Vec<&str> = line_str.split("stream").collect();
+            dict_str.push_str(v[0]);
+            break;
+        } else if line_str.contains("endobj") {
+            let v: Vec<&str> = line_str.split("endobj").collect();
+            dict_str.push_str(v[0]);
+            break;
         } else {
-            obj_dict_buffer.extend_from_slice(line);
+            dict_str.push_str(&line_str);
         }
+        dict_str.push_str("\n");
     }
 
-    let dict_str = String::from_utf8(obj_dict_buffer).unwrap();
+    println!("Parsing: {:?}", dict_str);
+
     let mut dict_parser = parsers::cos::Rdp::new(StringInput::new(&dict_str));
     dict_parser.node();
     let obj_dict = dict_parser.parse();
@@ -116,7 +121,7 @@ fn cat_xobject(file: &mut File, xref_entry: parsers::xref::XRefEntry) {
 
 // This is the main function
 fn main() {
-    let path = Path::new("michaelnguyen.pdf");
+    let path = Path::new("politics.pdf");
     let display = path.display();
 
     // Open the path in read-only mode, returns `io::Result<File>`
